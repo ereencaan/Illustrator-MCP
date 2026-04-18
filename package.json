@@ -1,0 +1,19 @@
+{
+  "name": "illustrator-mcp",
+  "version": "0.1.0",
+  "description": "MCP server controlling Adobe Illustrator via ExtendScript (Windows COM)",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "illustrator-mcp": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
