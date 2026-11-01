@@ -44,14 +44,35 @@ spawns PowerShell which calls `Illustrator.Application.DoJavaScriptFile`. The
 script writes `{success, data, error}` to a temp JSON file; Node reads it and
 returns it as the tool result. See [bridge/comBridge.js](bridge/comBridge.js).
 
+## Model-agnostic
+
+This server contains no model calls of its own. It exposes tool schemas and
+executes ExtendScript; which model drives those tools is entirely the MCP
+client's choice. There is no API key, no provider SDK, and no network egress in
+this codebase — everything happens over stdio and the local COM bridge.
+
+Shipped on 2026-11-01, developed with Claude Code on Windows 11.
+
+**Where the tool schemas were validated:** the 16 tool definitions below are
+declared with zod and registered through `@modelcontextprotocol/sdk`. They were
+verified from **Claude Code** (Windows 11) via a `tools/list` handshake over
+stdio — all 16 register and advertise their JSON Schema. No other MCP client has
+been exercised yet; the Claude Desktop config block above is the documented shape
+rather than a tested one. Any MCP-compliant client should work, since nothing
+here is client-specific.
+
 ## Tools
 
-### File
+16 tools, grouped by the file that defines them. Each group below mirrors the
+exported `*Tools` array in that file — if you add or rename a tool there,
+update the matching list here.
+
+### File — [tools/fileOps.js](tools/fileOps.js)
 - `open_file(path)`
 - `save_file(path, format)` — `ai | svg | pdf | png | jpg`
 - `close_file()`
 
-### Layers & objects
+### Layers & objects — [tools/layerOps.js](tools/layerOps.js)
 - `get_layers()`
 - `select_object(name)`
 - `apply_gradient(object_name, colors, angle)`
@@ -59,13 +80,13 @@ returns it as the tool result. See [bridge/comBridge.js](bridge/comBridge.js).
 - `apply_inner_glow(object_name, color, opacity, blur)`
 - `set_stroke(object_name, color, width)`
 
-### Text
+### Text — [tools/textOps.js](tools/textOps.js)
 - `get_text_objects()`
 - `set_font(object_name, font_family, font_size, font_weight)`
 - `set_text_color(object_name, color)`
 - `apply_text_gradient(object_name, colors)`
 
-### Effects & appearance
+### Effects & appearance — [tools/effects.js](tools/effects.js)
 - `apply_appearance_effect(object_name, effect_type, params)`
 - `set_opacity(object_name, opacity)`
 - `add_gaussian_blur(object_name, radius)`
