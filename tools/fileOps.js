@@ -1,55 +1,87 @@
-import { runJsx, jsxLit } from "../bridge.js";
+import { z } from "zod";
+import { runJsx } from "../bridge/comBridge.js";
 
-export async function openFile(path) {
-    const body = `
-        var f = new File(${jsxLit(path)});
-        if (!f.exists) throw new Error("File not found: " + ${jsxLit(path)});
-        var doc = app.open(f);
-        return { name: doc.name, path: doc.fullName.fsName };
-    `;
-    return runJsx(body);
-}
+export const openFile = {
+  name: "open_file",
+  description: "Open an existing file in Illustrator (.ai, .svg, .pdf, .eps).",
+  schema: {
+    path: z.string().describe("Absolute path to the file to open."),
+  },
+  handler: async ({ path }) => {
+    // JSON.stringify produces a safe JS string literal — no path value can
+    // escape the quotes, even with embedded quotes/backslashes/newlines.
+    const p = JSON.stringify(path.replace(/\\/g, "/"));
+    return runJsx(`
+      var f = new File(${p});
+      if (!f.exists) throw new Error("File not found: " + ${p});
+      var doc = app.open(f);
+      __ok({ name: doc.name, path: doc.fullName.fsName });
+    `);
+  },
+};
 
-export async function saveFile(path, format = "ai") {
-    const body = `
-        if (app.documents.length === 0) throw new Error("No open document");
-        var doc = app.activeDocument;
-        var f = new File(${jsxLit(path)});
-        var fmt = ${jsxLit(String(format).toLowerCase())};
-
-        if (fmt === "ai") {
-            var opts = new IllustratorSaveOptions();
-            doc.saveAs(f, opts);
-        } else if (fmt === "svg") {
-            var opts = new ExportOptionsSVG();
-            doc.exportFile(f, ExportType.SVG, opts);
-        } else if (fmt === "pdf") {
-            var opts = new PDFSaveOptions();
-            doc.saveAs(f, opts);
-        } else if (fmt === "png") {
-            var opts = new ExportOptionsPNG24();
-            opts.transparency = true;
-            opts.artBoardClipping = true;
-            doc.exportFile(f, ExportType.PNG24, opts);
-        } else if (fmt === "jpg" || fmt === "jpeg") {
-            var opts = new ExportOptionsJPEG();
-            opts.qualitySetting = 85;
-            opts.artBoardClipping = true;
-            doc.exportFile(f, ExportType.JPEG, opts);
-        } else {
-            throw new Error("Unsupported format: " + fmt);
+export const saveFile = {
+  name: "save_file",
+  description:
+    "Save the active document. Format controls the export type: ai, svg, pdf, png, jpg.",
+  schema: {
+    path: z.string().describe("Absolute output path. Extension should match format."),
+    format: z.enum(["ai", "svg", "pdf", "png", "jpg"]),
+  },
+  handler: async ({ path, format }) => {
+    const p = JSON.stringify(path.replace(/\\/g, "/"));
+    // format is validated by zod enum, so interpolation is safe, but still
+    // quote-wrap via JSON.stringify for consistency.
+    const fmt = JSON.stringify(format);
+    return runJsx(`
+      var doc = __requireDoc();
+      var out = new File(${p});
+      switch (${fmt}) {
+        case "ai": {
+          var opts = new IllustratorSaveOptions();
+          doc.saveAs(out, opts);
+          break;
         }
-        return { saved: f.fsName, format: fmt };
-    `;
-    return runJsx(body);
-}
+        case "svg": {
+          var sopts = new ExportOptionsSVG();
+          doc.exportFile(out, ExportType.SVG, sopts);
+          break;
+        }
+        case "pdf": {
+          var popts = new PDFSaveOptions();
+          doc.saveAs(out, popts);
+          break;
+        }
+        case "png": {
+          var popts2 = new ExportOptionsPNG24();
+          popts2.transparency = true;
+          doc.exportFile(out, ExportType.PNG24, popts2);
+          break;
+        }
+        case "jpg": {
+          var jopts = new ExportOptionsJPEG();
+          jopts.qualitySetting = 80;
+          doc.exportFile(out, ExportType.JPEG, jopts);
+          break;
+        }
+        default: throw new Error("Unsupported format: " + ${fmt});
+      }
+      __ok({ path: out.fsName });
+    `);
+  },
+};
 
-export async function closeFile() {
-    const body = `
-        if (app.documents.length === 0) throw new Error("No open document");
-        var name = app.activeDocument.name;
-        app.activeDocument.close(SaveOptions.DONOTSAVECHANGES);
-        return { closed: name };
-    `;
-    return runJsx(body);
-}
+export const closeFile = {
+  name: "close_file",
+  description: "Close the currently active document (without saving).",
+  schema: {},
+  handler: async () =>
+    runJsx(`
+      var doc = __requireDoc();
+      var name = doc.name;
+      doc.close(SaveOptions.DONOTSAVECHANGES);
+      __ok({ closed: name });
+    `),
+};
+
+export const fileTools = [openFile, saveFile, closeFile];

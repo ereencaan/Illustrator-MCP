@@ -1,82 +1,76 @@
-import { runJsx, jsxLit, safeNum } from "../bridge.js";
+import { z } from "zod";
+import { runJsx } from "../bridge/comBridge.js";
 
-const HELPERS = `
-    function requireDoc() {
-        if (app.documents.length === 0) throw new Error("No open document");
-        return app.activeDocument;
-    }
-    function findItemByName(doc, name) {
-        function walk(container) {
-            for (var i = 0; i < container.pageItems.length; i++) {
-                if (container.pageItems[i].name === name) return container.pageItems[i];
-            }
-            for (var j = 0; j < container.layers.length; j++) {
-                var hit = walk(container.layers[j]);
-                if (hit) return hit;
-            }
-            return null;
-        }
-        var hit = walk(doc);
-        if (hit) return hit;
-        for (var k = 0; k < doc.textFrames.length; k++) {
-            if (doc.textFrames[k].name === name) return doc.textFrames[k];
-        }
-        return null;
-    }
-`;
-
-/**
- * Apply a raw Illustrator LiveEffect by type id.
- * Well-known ids: "Adobe Drop Shadow", "Adobe Gaussian Blur", "Adobe Inner Glow",
- * "Adobe Outer Glow", "Adobe Feather", "Adobe Round Corners", etc.
- * params is an object of {key: value} pairs inserted into the effect Dict.
- * Value rules: numbers → "R key v", booleans → "B key 0|1", strings → "S key (val)".
- */
-export async function applyAppearanceEffect(objectName, effectType, params = {}) {
-    const pieces = [];
+export const applyAppearanceEffect = {
+  name: "apply_appearance_effect",
+  description:
+    "Apply a raw Illustrator live-effect by XML name + parameter dict. " +
+    "effect_type is the Adobe effect name (e.g. 'Adobe Gaussian Blur', 'Adobe Drop Shadow'). " +
+    "params is a flat key/value object inserted into the effect Dict (strings only).",
+  schema: {
+    object_name: z.string(),
+    effect_type: z.string(),
+    params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
+  },
+  handler: async ({ object_name, effect_type, params = {} }) => {
+    // Build the Dict data string: "TYPE key value TYPE key value ..."
+    // We infer type: number -> R, integer-ish -> I, boolean -> B, string -> S
+    const parts = [];
     for (const [k, v] of Object.entries(params)) {
-        if (typeof v === "number") pieces.push(`R ${k} ${v}`);
-        else if (typeof v === "boolean") pieces.push(`B ${k} ${v ? 1 : 0}`);
-        else pieces.push(`S ${k} (${String(v)})`);
+      if (typeof v === "boolean") parts.push(`B ${k} ${v ? 1 : 0}`);
+      else if (typeof v === "number") parts.push(Number.isInteger(v) ? `I ${k} ${v}` : `R ${k} ${v}`);
+      else parts.push(`S ${k} ${String(v)}`);
     }
-    const dict = pieces.join(" ");
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
-        var xml = '<LiveEffect name=${jsxLit(effectType).replace(/'/g, "\\'")}>'
-            + '<Dict data="${dict}"/>'
-            + '</LiveEffect>';
-        it.applyEffect(xml);
-        return { applied: "appearanceEffect", object: it.name, effect: ${jsxLit(effectType)} };
-    `;
-    return runJsx(body);
-}
+    const dictData = parts.join(" ") + (parts.length ? " " : "");
+    const xml = `<LiveEffect name="${effect_type}"><Dict data="${dictData}"/></LiveEffect>`;
 
-export async function setOpacity(objectName, opacity) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
-        it.opacity = ${safeNum(opacity, 100)};
-        return { applied: "opacity", object: it.name, opacity: it.opacity };
-    `;
-    return runJsx(body);
-}
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      it.applyEffect(${JSON.stringify(xml)});
+      __ok({ applied: it.name, effect: ${JSON.stringify(effect_type)} });
+    `);
+  },
+};
 
-export async function addGaussianBlur(objectName, radius = 5) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
-        var xml = '<LiveEffect name="Adobe Gaussian Blur">'
-          + '<Dict data="R radius ${safeNum(radius, 5)}"/>'
-          + '</LiveEffect>';
-        it.applyEffect(xml);
-        return { applied: "gaussianBlur", object: it.name, radius: ${safeNum(radius, 5)} };
-    `;
-    return runJsx(body);
-}
+export const setOpacity = {
+  name: "set_opacity",
+  description: "Set an object's opacity (0-100).",
+  schema: {
+    object_name: z.string(),
+    opacity: z.number().min(0).max(100),
+  },
+  handler: async ({ object_name, opacity }) => {
+    // zod already validates opacity is a number in [0,100], but Number() makes
+    // the invariant explicit and removes any chance of string interpolation.
+    const n = Number(opacity);
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      it.opacity = ${n};
+      __ok({ applied: it.name, opacity: ${n} });
+    `);
+  },
+};
+
+export const addGaussianBlur = {
+  name: "add_gaussian_blur",
+  description: "Apply a Gaussian blur effect with the given radius (pixels).",
+  schema: {
+    object_name: z.string(),
+    radius: z.number().positive(),
+  },
+  handler: async ({ object_name, radius }) => {
+    const r = Number(radius);
+    if (!Number.isFinite(r)) throw new Error("radius must be a finite number");
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      var xml = '<LiveEffect name="Adobe Gaussian Blur"><Dict data="R radius ${r} "/></LiveEffect>';
+      it.applyEffect(xml);
+      __ok({ applied: it.name, radius: ${r} });
+    `);
+  },
+};
+
+export const effectTools = [applyAppearanceEffect, setOpacity, addGaussianBlur];

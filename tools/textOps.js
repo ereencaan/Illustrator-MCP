@@ -1,119 +1,125 @@
-import { runJsx, jsxLit, safeNum } from "../bridge.js";
+import { z } from "zod";
+import { runJsx } from "../bridge/comBridge.js";
 
-const HELPERS = `
-    function requireDoc() {
-        if (app.documents.length === 0) throw new Error("No open document");
-        return app.activeDocument;
-    }
-    function findText(doc, name) {
-        for (var i = 0; i < doc.textFrames.length; i++) {
-            if (doc.textFrames[i].name === name) return doc.textFrames[i];
-        }
-        return null;
-    }
-    function toRgb(c) {
-        var r, g, b;
-        if (typeof c === "string") {
-            var s = c.charAt(0) === "#" ? c.substring(1) : c;
-            // Expand 3-digit hex (#abc -> #aabbcc).
-            if (s.length === 3) s = s.charAt(0)+s.charAt(0)+s.charAt(1)+s.charAt(1)+s.charAt(2)+s.charAt(2);
-            if (s.length !== 6) throw new Error("Invalid hex color: " + c);
-            r = parseInt(s.substring(0,2),16);
-            g = parseInt(s.substring(2,4),16);
-            b = parseInt(s.substring(4,6),16);
-            if (isNaN(r) || isNaN(g) || isNaN(b)) throw new Error("Invalid hex color: " + c);
-        } else if (c && c.length >= 3 && typeof c[0] === "number" && typeof c[1] === "number" && typeof c[2] === "number") {
-            r = c[0]; g = c[1]; b = c[2];
-        } else {
-            throw new Error("Invalid color value");
-        }
-        var col = new RGBColor();
-        col.red = r; col.green = g; col.blue = b;
-        return col;
-    }
-`;
+const colorSchema = z.union([
+  z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  z.object({ r: z.number(), g: z.number(), b: z.number() }),
+  z.object({ c: z.number(), m: z.number(), y: z.number(), k: z.number() }),
+]);
 
-export async function getTextObjects() {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var out = [];
-        for (var i = 0; i < doc.textFrames.length; i++) {
-            var t = doc.textFrames[i];
-            out.push({
-                name: t.name || "(unnamed)",
-                contents: t.contents,
-                length: t.contents.length
-            });
-        }
-        return out;
-    `;
-    return runJsx(body);
-}
+export const getTextObjects = {
+  name: "get_text_objects",
+  description: "List all text frames in the active document with their contents.",
+  schema: {},
+  handler: async () =>
+    runJsx(`
+      var doc = __requireDoc();
+      var out = [];
+      for (var i = 0; i < doc.textFrames.length; i++) {
+        var t = doc.textFrames[i];
+        out.push({
+          name: t.name,
+          contents: t.contents,
+          layer: t.layer ? t.layer.name : null
+        });
+      }
+      __ok(out);
+    `),
+};
 
-export async function setFont(objectName, fontFamily, fontSize, fontWeight = "Regular") {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var t = findText(doc, ${jsxLit(objectName)});
-        if (!t) throw new Error("Text not found: " + ${jsxLit(objectName)});
-        var wantFamily = ${jsxLit(fontFamily)};
-        var wantWeight = ${jsxLit(fontWeight)};
-        var chosen = null;
-        for (var i = 0; i < app.textFonts.length; i++) {
-            var f = app.textFonts[i];
-            if (f.family === wantFamily && f.style === wantWeight) { chosen = f; break; }
-        }
-        if (!chosen) {
-            // Fallback: family match only.
-            for (var j = 0; j < app.textFonts.length; j++) {
-                if (app.textFonts[j].family === wantFamily) { chosen = app.textFonts[j]; break; }
-            }
-        }
-        if (!chosen) throw new Error("Font not installed: " + wantFamily);
-        var attrs = t.textRange.characterAttributes;
-        attrs.textFont = chosen;
-        attrs.size = ${safeNum(fontSize, 12)};
-        return { applied: "font", object: t.name, font: chosen.name, size: attrs.size };
-    `;
-    return runJsx(body);
-}
+// Illustrator uses PostScript font names (e.g. "ArialMT"). We accept a family
+// name and try to match the first font whose family matches (case-insensitive).
+export const setFont = {
+  name: "set_font",
+  description:
+    "Set font family, size, and weight on a text object. font_family matches PostScript names loosely.",
+  schema: {
+    object_name: z.string(),
+    font_family: z.string(),
+    font_size: z.number().positive().default(12),
+    font_weight: z
+      .enum(["regular", "bold", "italic", "bold-italic"])
+      .default("regular"),
+  },
+  handler: async ({ object_name, font_family, font_size = 12, font_weight = "regular" }) => {
+    const sz = Number(font_size);
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      if (it.typename !== "TextFrame") throw new Error("Not a text object: " + it.typename);
 
-export async function setTextColor(objectName, color) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var t = findText(doc, ${jsxLit(objectName)});
-        if (!t) throw new Error("Text not found: " + ${jsxLit(objectName)});
-        t.textRange.characterAttributes.fillColor = toRgb(${jsxLit(color)});
-        return { applied: "textColor", object: t.name };
-    `;
-    return runJsx(body);
-}
+      var family = ${JSON.stringify(font_family)}.toLowerCase();
+      var weight = ${JSON.stringify(font_weight)};
+      var wantBold = (weight === "bold" || weight === "bold-italic");
+      var wantItalic = (weight === "italic" || weight === "bold-italic");
 
-export async function applyTextGradient(objectName, colors) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var t = findText(doc, ${jsxLit(objectName)});
-        if (!t) throw new Error("Text not found: " + ${jsxLit(objectName)});
-        var stops = ${jsxLit(colors)};
-        if (!stops || stops.length < 2) throw new Error("Need at least 2 colors");
+      var picked = null, fallback = null;
+      for (var i = 0; i < app.textFonts.length; i++) {
+        var f = app.textFonts[i];
+        var fam = (f.family || "").toLowerCase();
+        var style = (f.style || "").toLowerCase();
+        if (fam.indexOf(family) === -1) continue;
+        if (!fallback) fallback = f;
+        var isBold = style.indexOf("bold") !== -1;
+        var isItalic = style.indexOf("italic") !== -1 || style.indexOf("oblique") !== -1;
+        if (isBold === wantBold && isItalic === wantItalic) { picked = f; break; }
+      }
+      var font = picked || fallback;
+      if (!font) throw new Error("No font found matching family: " + ${JSON.stringify(font_family)});
 
-        var grad = doc.gradients.add();
-        grad.type = GradientType.LINEAR;
-        var __safety = 0;
-        while (grad.gradientStops.length < stops.length && __safety++ < 1000) grad.gradientStops.add();
-        if (grad.gradientStops.length < stops.length) throw new Error("Failed to allocate gradient stops");
-        for (var i = 0; i < stops.length; i++) {
-            var s = grad.gradientStops[i];
-            s.color = toRgb(stops[i]);
-            s.rampPoint = (i / (stops.length - 1)) * 100;
-        }
-        var gc = new GradientColor();
-        gc.gradient = grad;
-        t.textRange.characterAttributes.fillColor = gc;
-        return { applied: "textGradient", object: t.name, stops: stops.length };
-    `;
-    return runJsx(body);
-}
+      var attrs = it.textRange.characterAttributes;
+      attrs.textFont = font;
+      attrs.size = ${sz};
+      __ok({ applied: it.name, font: font.name, size: ${sz} });
+    `);
+  },
+};
+
+export const setTextColor = {
+  name: "set_text_color",
+  description: "Set fill color on a text object.",
+  schema: { object_name: z.string(), color: colorSchema },
+  handler: async ({ object_name, color }) =>
+    runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      if (it.typename !== "TextFrame") throw new Error("Not a text object: " + it.typename);
+      it.textRange.characterAttributes.fillColor = __toColor(${JSON.stringify(color)});
+      __ok({ applied: it.name });
+    `),
+};
+
+export const applyTextGradient = {
+  name: "apply_text_gradient",
+  description:
+    "Apply a linear gradient fill to a text object. Converts the text to outlines is NOT done — gradient is applied via appearance.",
+  schema: {
+    object_name: z.string(),
+    colors: z.array(colorSchema).min(2),
+  },
+  handler: async ({ object_name, colors }) =>
+    runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      if (it.typename !== "TextFrame") throw new Error("Not a text object: " + it.typename);
+
+      var doc = __requireDoc();
+      var colorsIn = ${JSON.stringify(colors)};
+      var g = doc.gradients.add();
+      g.type = GradientType.LINEAR;
+      // Normalize stop count to match colorsIn (zod guarantees length >= 2).
+      while (g.gradientStops.length < colorsIn.length) g.gradientStops.add();
+      while (g.gradientStops.length > colorsIn.length) g.gradientStops[g.gradientStops.length - 1].remove();
+      for (var i = 0; i < colorsIn.length; i++) {
+        var stop = g.gradientStops[i];
+        stop.color = __toColor(colorsIn[i]);
+        stop.rampPoint = (i / (colorsIn.length - 1)) * 100;
+      }
+      var gc = new GradientColor();
+      gc.gradient = g;
+      it.textRange.characterAttributes.fillColor = gc;
+      __ok({ applied: it.name });
+    `),
+};
+
+export const textTools = [getTextObjects, setFont, setTextColor, applyTextGradient];

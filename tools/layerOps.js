@@ -1,167 +1,208 @@
-import { runJsx, jsxLit, safeNum } from "../bridge.js";
+import { z } from "zod";
+import { runJsx } from "../bridge/comBridge.js";
 
-const HELPERS = `
-    function requireDoc() {
-        if (app.documents.length === 0) throw new Error("No open document");
-        return app.activeDocument;
-    }
-    function findItemByName(doc, name) {
-        function walk(container) {
-            for (var i = 0; i < container.pageItems.length; i++) {
-                var it = container.pageItems[i];
-                if (it.name === name) return it;
-            }
-            for (var j = 0; j < container.layers.length; j++) {
-                var hit = walk(container.layers[j]);
-                if (hit) return hit;
-            }
-            return null;
+const colorSchema = z.union([
+  z.string().regex(/^#[0-9a-fA-F]{6}$/, "hex like #aabbcc"),
+  z.object({ r: z.number(), g: z.number(), b: z.number() }),
+  z.object({ c: z.number(), m: z.number(), y: z.number(), k: z.number() }),
+]);
+
+export const getLayers = {
+  name: "get_layers",
+  description: "List all layers in the active document, with their top-level page items.",
+  schema: {},
+  handler: async () =>
+    runJsx(`
+      var doc = __requireDoc();
+      var out = [];
+      for (var i = 0; i < doc.layers.length; i++) {
+        var l = doc.layers[i];
+        var items = [];
+        for (var j = 0; j < l.pageItems.length; j++) {
+          var it = l.pageItems[j];
+          items.push({ name: it.name, type: it.typename });
         }
-        return walk(doc);
-    }
-    function toRgb(c) {
-        // c can be [r,g,b] 0-255 or "#rrggbb" / "#rgb"
-        var r, g, b;
-        if (typeof c === "string") {
-            var s = c.charAt(0) === "#" ? c.substring(1) : c;
-            if (s.length === 3) s = s.charAt(0)+s.charAt(0)+s.charAt(1)+s.charAt(1)+s.charAt(2)+s.charAt(2);
-            if (s.length !== 6) throw new Error("Invalid hex color: " + c);
-            r = parseInt(s.substring(0,2),16);
-            g = parseInt(s.substring(2,4),16);
-            b = parseInt(s.substring(4,6),16);
-            if (isNaN(r) || isNaN(g) || isNaN(b)) throw new Error("Invalid hex color: " + c);
-        } else if (c && c.length >= 3 && typeof c[0] === "number" && typeof c[1] === "number" && typeof c[2] === "number") {
-            r = c[0]; g = c[1]; b = c[2];
-        } else {
-            throw new Error("Invalid color value");
-        }
-        var col = new RGBColor();
-        col.red = r; col.green = g; col.blue = b;
-        return col;
-    }
-`;
+        out.push({ name: l.name, visible: l.visible, locked: l.locked, items: items });
+      }
+      __ok(out);
+    `),
+};
 
-export async function getLayers() {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        function dump(layer) {
-            var items = [];
-            for (var i = 0; i < layer.pageItems.length; i++) {
-                var it = layer.pageItems[i];
-                items.push({ name: it.name || "(unnamed)", type: it.typename });
-            }
-            var sub = [];
-            for (var j = 0; j < layer.layers.length; j++) sub.push(dump(layer.layers[j]));
-            return { name: layer.name, visible: layer.visible, locked: layer.locked, items: items, sublayers: sub };
-        }
-        var out = [];
-        for (var k = 0; k < doc.layers.length; k++) out.push(dump(doc.layers[k]));
-        return out;
-    `;
-    return runJsx(body);
-}
+export const selectObject = {
+  name: "select_object",
+  description: "Select a page item in the active document by name.",
+  schema: { name: z.string() },
+  handler: async ({ name }) =>
+    runJsx(`
+      var doc = __requireDoc();
+      doc.selection = null;
+      var it = __findByName(${JSON.stringify(name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(name)});
+      it.selected = true;
+      __ok({ selected: it.name, type: it.typename });
+    `),
+};
 
-export async function selectObject(name) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(name)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(name)});
-        doc.selection = null;
-        it.selected = true;
-        return { selected: it.name, type: it.typename };
-    `;
-    return runJsx(body);
-}
+export const applyGradient = {
+  name: "apply_gradient",
+  description: "Fill an object with a linear gradient of the given colors and angle.",
+  schema: {
+    object_name: z.string(),
+    colors: z.array(colorSchema).min(2).describe("Two or more color stops."),
+    angle: z.number().default(0).describe("Gradient angle in degrees."),
+  },
+  handler: async ({ object_name, colors, angle = 0 }) => {
+    const a = Number(angle);
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      var colorsIn = ${JSON.stringify(colors)};
+      var doc = __requireDoc();
 
-export async function applyGradient(objectName, colors, angle = 0) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
+      var g = doc.gradients.add();
+      g.type = GradientType.LINEAR;
+      // Normalize stop count to match colorsIn (zod guarantees length >= 2).
+      while (g.gradientStops.length < colorsIn.length) g.gradientStops.add();
+      while (g.gradientStops.length > colorsIn.length) g.gradientStops[g.gradientStops.length - 1].remove();
+      for (var i = 0; i < colorsIn.length; i++) {
+        var stop = g.gradientStops[i];
+        stop.color = __toColor(colorsIn[i]);
+        stop.rampPoint = (i / (colorsIn.length - 1)) * 100;
+      }
 
-        var stops = ${jsxLit(colors)};
-        if (!stops || stops.length < 2) throw new Error("Need at least 2 colors");
+      var gc = new GradientColor();
+      gc.gradient = g;
+      gc.angle = ${a};
+      it.filled = true;
+      it.fillColor = gc;
+      __ok({ applied: it.name, stops: colorsIn.length });
+    `);
+  },
+};
 
-        var grad = doc.gradients.add();
-        grad.type = GradientType.LINEAR;
-        // Default gradient has 2 stops; add more if needed.
-        var __safety = 0;
-        while (grad.gradientStops.length < stops.length && __safety++ < 1000) grad.gradientStops.add();
-        if (grad.gradientStops.length < stops.length) throw new Error("Failed to allocate gradient stops");
-        for (var i = 0; i < stops.length; i++) {
-            var s = grad.gradientStops[i];
-            s.color = toRgb(stops[i]);
-            s.rampPoint = (i / (stops.length - 1)) * 100;
-            s.midPoint = 50;
-        }
-        var gc = new GradientColor();
-        gc.gradient = grad;
-        gc.angle = ${safeNum(angle, 0)};
-        it.fillColor = gc;
-        return { applied: "gradient", object: it.name, stops: stops.length };
-    `;
-    return runJsx(body);
-}
+export const applyDropShadow = {
+  name: "apply_drop_shadow",
+  description: "Apply a drop-shadow effect to an object.",
+  schema: {
+    object_name: z.string(),
+    opacity: z.number().min(0).max(100).default(75),
+    x_offset: z.number().default(3),
+    y_offset: z.number().default(3),
+    blur: z.number().default(5),
+  },
+  handler: async ({ object_name, opacity = 75, x_offset = 3, y_offset = 3, blur = 5 }) => {
+    const op = Number(opacity) / 100;
+    const dx = Number(x_offset);
+    const dy = Number(y_offset);
+    const bl = Number(blur);
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      var xml = '<LiveEffect name="Adobe Drop Shadow">'
+              + '<Dict data="R opac ${op} R dx ${dx} R dy ${dy} R blur ${bl} '
+              + 'I mode 0 R csrc 0 R csrcB 0 R csrcG 0 R csrcR 0 B useNewShadow 1 "/>'
+              + '</LiveEffect>';
+      it.applyEffect(xml);
+      __ok({ applied: it.name });
+    `);
+  },
+};
 
-export async function applyDropShadow(objectName, opacity = 75, xOffset = 7, yOffset = 7, blur = 5) {
-    // Illustrator exposes drop shadow via the LiveEffect XML API.
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
-        var xml = '<LiveEffect name="Adobe Drop Shadow">'
-          + '<Dict data="'
-          + 'R mode 0 '
-          + 'R opacity ${safeNum(opacity, 75) / 100} '
-          + 'R dx ${safeNum(xOffset, 7)} '
-          + 'R dy ${safeNum(yOffset, 7)} '
-          + 'R blur ${safeNum(blur, 5)} '
-          + 'B csrc 1 '
-          + 'R color-R 0 R color-G 0 R color-B 0 '
-          + '"/></LiveEffect>';
-        it.applyEffect(xml);
-        return { applied: "dropShadow", object: it.name };
-    `;
-    return runJsx(body);
-}
+export const applyInnerGlow = {
+  name: "apply_inner_glow",
+  description: "Apply an inner-glow effect to an object.",
+  schema: {
+    object_name: z.string(),
+    color: colorSchema.default("#ffffff"),
+    opacity: z.number().min(0).max(100).default(75),
+    blur: z.number().default(5),
+  },
+  handler: async ({ object_name, color = "#ffffff", opacity = 75, blur = 5 }) => {
+    const op = Number(opacity) / 100;
+    const bl = Number(blur);
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      var col = __toColor(${JSON.stringify(color)});
+      var r = 0, g = 0, b = 0;
+      if (col.typename === "RGBColor")   { r = col.red; g = col.green; b = col.blue; }
+      // Inner glow uses RGB in the effect XML regardless of document color space.
+      var xml = '<LiveEffect name="Adobe Inner Glow">'
+              + '<Dict data="R opac ${op} R blur ${bl} R csrcR ' + (r / 255) + ' R csrcG ' + (g / 255) + ' R csrcB ' + (b / 255) + ' I mode 0 B edge 1 "/>'
+              + '</LiveEffect>';
+      it.applyEffect(xml);
+      __ok({ applied: it.name });
+    `);
+  },
+};
 
-export async function applyInnerGlow(objectName, color = "#ffffff", opacity = 75, blur = 5) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
-        var c = toRgb(${jsxLit(color)});
-        var xml = '<LiveEffect name="Adobe Inner Glow">'
-          + '<Dict data="'
-          + 'R mode 0 '
-          + 'R opacity ${safeNum(opacity, 75) / 100} '
-          + 'R blur ${safeNum(blur, 5)} '
-          + 'R color-R ' + (c.red/255) + ' '
-          + 'R color-G ' + (c.green/255) + ' '
-          + 'R color-B ' + (c.blue/255) + ' '
-          + 'B edge 1 '
-          + '"/></LiveEffect>';
-        it.applyEffect(xml);
-        return { applied: "innerGlow", object: it.name };
-    `;
-    return runJsx(body);
-}
+export const setStroke = {
+  name: "set_stroke",
+  description: "Set stroke color and width on an object.",
+  schema: {
+    object_name: z.string(),
+    color: colorSchema,
+    width: z.number().min(0).default(1),
+  },
+  handler: async ({ object_name, color, width = 1 }) => {
+    const w = Number(width);
+    return runJsx(`
+      var it = __findByName(${JSON.stringify(object_name)});
+      if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
+      it.stroked = true;
+      it.strokeColor = __toColor(${JSON.stringify(color)});
+      it.strokeWidth = ${w};
+      __ok({ applied: it.name });
+    `);
+  },
+};
 
-export async function setStroke(objectName, color, width) {
-    const body = `
-        ${HELPERS}
-        var doc = requireDoc();
-        var it = findItemByName(doc, ${jsxLit(objectName)});
-        if (!it) throw new Error("Object not found: " + ${jsxLit(objectName)});
-        it.stroked = true;
-        it.strokeColor = toRgb(${jsxLit(color)});
-        it.strokeWidth = ${safeNum(width, 1)};
-        return { applied: "stroke", object: it.name, width: it.strokeWidth };
-    `;
-    return runJsx(body);
-}
+export const renameItems = {
+  name: "rename_items",
+  description:
+    "Rename items in the active document. Entries are {kind, index, new_name}; " +
+    "'any' iterates all pageItems of the first layer in z-order.",
+  schema: {
+    entries: z
+      .array(
+        z.object({
+          kind: z.enum(["text", "path", "group", "any"]),
+          index: z.number().int().min(0),
+          new_name: z.string(),
+        })
+      )
+      .min(1),
+  },
+  handler: async ({ entries }) =>
+    runJsx(`
+      var doc = __requireDoc();
+      var entries = ${JSON.stringify(entries)};
+      var renamed = [];
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var target = null;
+        // An out-of-range index throws in ExtendScript rather than yielding
+        // undefined, so catch it per entry and keep going.
+        try {
+          if (e.kind === "text") target = doc.textFrames[e.index];
+          else if (e.kind === "path") target = doc.pathItems[e.index];
+          else if (e.kind === "group") target = doc.groupItems[e.index];
+          else if (e.kind === "any") target = doc.layers[0].pageItems[e.index];
+        } catch (err) { target = null; }
+        if (!target) { renamed.push({ error: "not found", entry: e }); continue; }
+        target.name = e.new_name;
+        renamed.push({ kind: e.kind, index: e.index, name: target.name, type: target.typename });
+      }
+      __ok(renamed);
+    `),
+};
+
+export const layerTools = [
+  getLayers,
+  selectObject,
+  applyGradient,
+  applyDropShadow,
+  applyInnerGlow,
+  setStroke,
+  renameItems,
+];
