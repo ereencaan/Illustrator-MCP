@@ -9,13 +9,14 @@ import { fileTools } from "./tools/fileOps.js";
 import { layerTools } from "./tools/layerOps.js";
 import { textTools } from "./tools/textOps.js";
 import { effectTools } from "./tools/effects.js";
+import { rawTools } from "./tools/rawOps.js";
 
 const server = new McpServer({
   name: "illustrator-mcp",
   version: "0.1.0",
 });
 
-const allTools = [...fileTools, ...layerTools, ...textTools, ...effectTools];
+const allTools = [...fileTools, ...layerTools, ...textTools, ...effectTools, ...rawTools];
 
 for (const tool of allTools) {
   server.registerTool(

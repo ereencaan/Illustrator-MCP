@@ -157,6 +157,46 @@ export const setStroke = {
   },
 };
 
+export const renameItems = {
+  name: "rename_items",
+  description:
+    "Rename items in the active document. Entries are {kind, index, new_name}; " +
+    "'any' iterates all pageItems of the first layer in z-order.",
+  schema: {
+    entries: z
+      .array(
+        z.object({
+          kind: z.enum(["text", "path", "group", "any"]),
+          index: z.number().int().min(0),
+          new_name: z.string(),
+        })
+      )
+      .min(1),
+  },
+  handler: async ({ entries }) =>
+    runJsx(`
+      var doc = __requireDoc();
+      var entries = ${JSON.stringify(entries)};
+      var renamed = [];
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var target = null;
+        // An out-of-range index throws in ExtendScript rather than yielding
+        // undefined, so catch it per entry and keep going.
+        try {
+          if (e.kind === "text") target = doc.textFrames[e.index];
+          else if (e.kind === "path") target = doc.pathItems[e.index];
+          else if (e.kind === "group") target = doc.groupItems[e.index];
+          else if (e.kind === "any") target = doc.layers[0].pageItems[e.index];
+        } catch (err) { target = null; }
+        if (!target) { renamed.push({ error: "not found", entry: e }); continue; }
+        target.name = e.new_name;
+        renamed.push({ kind: e.kind, index: e.index, name: target.name, type: target.typename });
+      }
+      __ok(renamed);
+    `),
+};
+
 export const layerTools = [
   getLayers,
   selectObject,
@@ -164,4 +204,5 @@ export const layerTools = [
   applyDropShadow,
   applyInnerGlow,
   setStroke,
+  renameItems,
 ];

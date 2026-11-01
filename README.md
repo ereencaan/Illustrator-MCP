@@ -53,17 +53,17 @@ this codebase — everything happens over stdio and the local COM bridge.
 
 Shipped on 2026-11-01, developed with Claude Code on Windows 11.
 
-**Where the tool schemas were validated:** the 16 tool definitions below are
+**Where the tool schemas were validated:** the 18 tool definitions below are
 declared with zod and registered through `@modelcontextprotocol/sdk`. They were
 verified from **Claude Code** (Windows 11) via a `tools/list` handshake over
-stdio — all 16 register and advertise their JSON Schema. No other MCP client has
+stdio — all 18 register and advertise their JSON Schema. No other MCP client has
 been exercised yet; the Claude Desktop config block above is the documented shape
 rather than a tested one. Any MCP-compliant client should work, since nothing
 here is client-specific.
 
 ## Tools
 
-16 tools, grouped by the file that defines them. Each group below mirrors the
+18 tools, grouped by the file that defines them. Each group below mirrors the
 exported `*Tools` array in that file — if you add or rename a tool there,
 update the matching list here.
 
@@ -79,6 +79,8 @@ update the matching list here.
 - `apply_drop_shadow(object_name, opacity, x_offset, y_offset, blur)`
 - `apply_inner_glow(object_name, color, opacity, blur)`
 - `set_stroke(object_name, color, width)`
+- `rename_items(entries)` — `entries[] = {kind, index, new_name}`, `kind` is
+  `text | path | group | any`
 
 ### Text — [tools/textOps.js](tools/textOps.js)
 - `get_text_objects()`
@@ -90,6 +92,12 @@ update the matching list here.
 - `apply_appearance_effect(object_name, effect_type, params)`
 - `set_opacity(object_name, opacity)`
 - `add_gaussian_blur(object_name, radius)`
+
+### Escape hatch — [tools/rawOps.js](tools/rawOps.js)
+- `run_jsx(code)` — run raw ExtendScript inside Illustrator; the snippet must
+  `return` a JSON-serializable value. Unlike every other tool, whose parameters
+  are escaped into a fixed template, this one runs arbitrary code by design —
+  it is as trusted as the client driving it.
 
 ## Color format
 
