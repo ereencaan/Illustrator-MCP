@@ -41,8 +41,9 @@ export const setFont = {
       .enum(["regular", "bold", "italic", "bold-italic"])
       .default("regular"),
   },
-  handler: async ({ object_name, font_family, font_size = 12, font_weight = "regular" }) =>
-    runJsx(`
+  handler: async ({ object_name, font_family, font_size = 12, font_weight = "regular" }) => {
+    const sz = Number(font_size);
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
       if (it.typename !== "TextFrame") throw new Error("Not a text object: " + it.typename);
@@ -68,9 +69,10 @@ export const setFont = {
 
       var attrs = it.textRange.characterAttributes;
       attrs.textFont = font;
-      attrs.size = ${font_size};
-      __ok({ applied: it.name, font: font.name, size: ${font_size} });
-    `),
+      attrs.size = ${sz};
+      __ok({ applied: it.name, font: font.name, size: ${sz} });
+    `);
+  },
 };
 
 export const setTextColor = {
@@ -105,9 +107,11 @@ export const applyTextGradient = {
       var colorsIn = ${JSON.stringify(colors)};
       var g = doc.gradients.add();
       g.type = GradientType.LINEAR;
-      while (g.gradientStops.length > 2) { g.gradientStops[g.gradientStops.length - 1].remove(); }
+      // Normalize stop count to match colorsIn (zod guarantees length >= 2).
+      while (g.gradientStops.length < colorsIn.length) g.gradientStops.add();
+      while (g.gradientStops.length > colorsIn.length) g.gradientStops[g.gradientStops.length - 1].remove();
       for (var i = 0; i < colorsIn.length; i++) {
-        var stop = (i < g.gradientStops.length) ? g.gradientStops[i] : g.gradientStops.add();
+        var stop = g.gradientStops[i];
         stop.color = __toColor(colorsIn[i]);
         stop.rampPoint = (i / (colorsIn.length - 1)) * 100;
       }

@@ -195,23 +195,31 @@ ${scriptBody}
 `;
   await writeFile(scriptPath, full, "utf8");
 
-  const ps = [
-    "$ErrorActionPreference='Stop';",
-    "try {",
-    "  $ai = New-Object -ComObject Illustrator.Application;",
-    `  $ai.DoJavaScriptFile('${scriptPath.replace(/'/g, "''")}', $null, 2);`,
-    "} catch {",
-    `  $err = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress;`,
-    `  Set-Content -Path '${resultPath.replace(/'/g, "''")}' -Value $err -Encoding UTF8;`,
-    "  exit 1;",
-    "}",
-  ].join(" ");
+  // Paths are passed via environment variables, not interpolated into the
+  // PowerShell command string, so a weird temp path can't ever escape its
+  // quotes and become code.
+  const ps = `
+    $ErrorActionPreference = 'Stop';
+    $scriptPath = $env:AI_MCP_SCRIPT;
+    $resultPath = $env:AI_MCP_RESULT;
+    try {
+      $ai = New-Object -ComObject Illustrator.Application;
+      $ai.DoJavaScriptFile($scriptPath, $null, 2);
+    } catch {
+      $err = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json -Compress;
+      Set-Content -LiteralPath $resultPath -Value $err -Encoding UTF8;
+      exit 1;
+    }
+  `;
 
   await new Promise((resolve) => {
     const child = spawn(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps],
-      { windowsHide: true }
+      {
+        windowsHide: true,
+        env: { ...process.env, AI_MCP_SCRIPT: scriptPath, AI_MCP_RESULT: resultPath },
+      }
     );
     let stderr = "";
     child.stderr.on("data", (b) => (stderr += b.toString()));

@@ -8,10 +8,12 @@ export const openFile = {
     path: z.string().describe("Absolute path to the file to open."),
   },
   handler: async ({ path }) => {
-    const p = path.replace(/\\/g, "/");
+    // JSON.stringify produces a safe JS string literal — no path value can
+    // escape the quotes, even with embedded quotes/backslashes/newlines.
+    const p = JSON.stringify(path.replace(/\\/g, "/"));
     return runJsx(`
-      var f = new File("${p}");
-      if (!f.exists) throw new Error("File not found: ${p}");
+      var f = new File(${p});
+      if (!f.exists) throw new Error("File not found: " + ${p});
       var doc = app.open(f);
       __ok({ name: doc.name, path: doc.fullName.fsName });
     `);
@@ -27,11 +29,14 @@ export const saveFile = {
     format: z.enum(["ai", "svg", "pdf", "png", "jpg"]),
   },
   handler: async ({ path, format }) => {
-    const p = path.replace(/\\/g, "/");
+    const p = JSON.stringify(path.replace(/\\/g, "/"));
+    // format is validated by zod enum, so interpolation is safe, but still
+    // quote-wrap via JSON.stringify for consistency.
+    const fmt = JSON.stringify(format);
     return runJsx(`
       var doc = __requireDoc();
-      var out = new File("${p}");
-      switch ("${format}") {
+      var out = new File(${p});
+      switch (${fmt}) {
         case "ai": {
           var opts = new IllustratorSaveOptions();
           doc.saveAs(out, opts);
@@ -59,7 +64,7 @@ export const saveFile = {
           doc.exportFile(out, ExportType.JPEG, jopts);
           break;
         }
-        default: throw new Error("Unsupported format: ${format}");
+        default: throw new Error("Unsupported format: " + ${fmt});
       }
       __ok({ path: out.fsName });
     `);

@@ -25,9 +25,20 @@ for (const tool of allTools) {
       inputSchema: tool.schema,
     },
     async (args) => {
-      const result = await tool.handler(args ?? {});
+      let result;
+      try {
+        result = await tool.handler(args ?? {});
+      } catch (err) {
+        result = { success: false, error: err && err.message ? err.message : String(err) };
+      }
+      let text;
+      try {
+        text = JSON.stringify(result, null, 2);
+      } catch {
+        text = JSON.stringify({ success: false, error: "Result not serializable" });
+      }
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text }],
         isError: result.success === false,
       };
     }

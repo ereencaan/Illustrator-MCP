@@ -51,8 +51,9 @@ export const applyGradient = {
     colors: z.array(colorSchema).min(2).describe("Two or more color stops."),
     angle: z.number().default(0).describe("Gradient angle in degrees."),
   },
-  handler: async ({ object_name, colors, angle = 0 }) =>
-    runJsx(`
+  handler: async ({ object_name, colors, angle = 0 }) => {
+    const a = Number(angle);
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
       var colorsIn = ${JSON.stringify(colors)};
@@ -60,23 +61,23 @@ export const applyGradient = {
 
       var g = doc.gradients.add();
       g.type = GradientType.LINEAR;
-      // Remove default stops down to 2, then rebuild.
-      while (g.gradientStops.length > 2) {
-        g.gradientStops[g.gradientStops.length - 1].remove();
-      }
+      // Normalize stop count to match colorsIn (zod guarantees length >= 2).
+      while (g.gradientStops.length < colorsIn.length) g.gradientStops.add();
+      while (g.gradientStops.length > colorsIn.length) g.gradientStops[g.gradientStops.length - 1].remove();
       for (var i = 0; i < colorsIn.length; i++) {
-        var stop = (i < g.gradientStops.length) ? g.gradientStops[i] : g.gradientStops.add();
+        var stop = g.gradientStops[i];
         stop.color = __toColor(colorsIn[i]);
-        stop.rampPoint = (colorsIn.length === 1) ? 0 : (i / (colorsIn.length - 1)) * 100;
+        stop.rampPoint = (i / (colorsIn.length - 1)) * 100;
       }
 
       var gc = new GradientColor();
       gc.gradient = g;
-      gc.angle = ${angle};
+      gc.angle = ${a};
       it.filled = true;
       it.fillColor = gc;
       __ok({ applied: it.name, stops: colorsIn.length });
-    `),
+    `);
+  },
 };
 
 export const applyDropShadow = {
@@ -89,17 +90,22 @@ export const applyDropShadow = {
     y_offset: z.number().default(3),
     blur: z.number().default(5),
   },
-  handler: async ({ object_name, opacity = 75, x_offset = 3, y_offset = 3, blur = 5 }) =>
-    runJsx(`
+  handler: async ({ object_name, opacity = 75, x_offset = 3, y_offset = 3, blur = 5 }) => {
+    const op = Number(opacity) / 100;
+    const dx = Number(x_offset);
+    const dy = Number(y_offset);
+    const bl = Number(blur);
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
       var xml = '<LiveEffect name="Adobe Drop Shadow">'
-              + '<Dict data="R opac ${opacity / 100} R dx ${x_offset} R dy ${y_offset} R blur ${blur} '
+              + '<Dict data="R opac ${op} R dx ${dx} R dy ${dy} R blur ${bl} '
               + 'I mode 0 R csrc 0 R csrcB 0 R csrcG 0 R csrcR 0 B useNewShadow 1 "/>'
               + '</LiveEffect>';
       it.applyEffect(xml);
       __ok({ applied: it.name });
-    `),
+    `);
+  },
 };
 
 export const applyInnerGlow = {
@@ -111,8 +117,10 @@ export const applyInnerGlow = {
     opacity: z.number().min(0).max(100).default(75),
     blur: z.number().default(5),
   },
-  handler: async ({ object_name, color = "#ffffff", opacity = 75, blur = 5 }) =>
-    runJsx(`
+  handler: async ({ object_name, color = "#ffffff", opacity = 75, blur = 5 }) => {
+    const op = Number(opacity) / 100;
+    const bl = Number(blur);
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
       var col = __toColor(${JSON.stringify(color)});
@@ -120,11 +128,12 @@ export const applyInnerGlow = {
       if (col.typename === "RGBColor")   { r = col.red; g = col.green; b = col.blue; }
       // Inner glow uses RGB in the effect XML regardless of document color space.
       var xml = '<LiveEffect name="Adobe Inner Glow">'
-              + '<Dict data="R opac ${opacity / 100} R blur ${blur} R csrcR ' + (r / 255) + ' R csrcG ' + (g / 255) + ' R csrcB ' + (b / 255) + ' I mode 0 B edge 1 "/>'
+              + '<Dict data="R opac ${op} R blur ${bl} R csrcR ' + (r / 255) + ' R csrcG ' + (g / 255) + ' R csrcB ' + (b / 255) + ' I mode 0 B edge 1 "/>'
               + '</LiveEffect>';
       it.applyEffect(xml);
       __ok({ applied: it.name });
-    `),
+    `);
+  },
 };
 
 export const setStroke = {
@@ -135,15 +144,17 @@ export const setStroke = {
     color: colorSchema,
     width: z.number().min(0).default(1),
   },
-  handler: async ({ object_name, color, width = 1 }) =>
-    runJsx(`
+  handler: async ({ object_name, color, width = 1 }) => {
+    const w = Number(width);
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
       it.stroked = true;
       it.strokeColor = __toColor(${JSON.stringify(color)});
-      it.strokeWidth = ${width};
+      it.strokeWidth = ${w};
       __ok({ applied: it.name });
-    `),
+    `);
+  },
 };
 
 export const layerTools = [

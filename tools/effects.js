@@ -40,13 +40,17 @@ export const setOpacity = {
     object_name: z.string(),
     opacity: z.number().min(0).max(100),
   },
-  handler: async ({ object_name, opacity }) =>
-    runJsx(`
+  handler: async ({ object_name, opacity }) => {
+    // zod already validates opacity is a number in [0,100], but Number() makes
+    // the invariant explicit and removes any chance of string interpolation.
+    const n = Number(opacity);
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
-      it.opacity = ${opacity};
-      __ok({ applied: it.name, opacity: ${opacity} });
-    `),
+      it.opacity = ${n};
+      __ok({ applied: it.name, opacity: ${n} });
+    `);
+  },
 };
 
 export const addGaussianBlur = {
@@ -56,14 +60,17 @@ export const addGaussianBlur = {
     object_name: z.string(),
     radius: z.number().positive(),
   },
-  handler: async ({ object_name, radius }) =>
-    runJsx(`
+  handler: async ({ object_name, radius }) => {
+    const r = Number(radius);
+    if (!Number.isFinite(r)) throw new Error("radius must be a finite number");
+    return runJsx(`
       var it = __findByName(${JSON.stringify(object_name)});
       if (!it) throw new Error("Object not found: " + ${JSON.stringify(object_name)});
-      var xml = '<LiveEffect name="Adobe Gaussian Blur"><Dict data="R radius ${radius} "/></LiveEffect>';
+      var xml = '<LiveEffect name="Adobe Gaussian Blur"><Dict data="R radius ${r} "/></LiveEffect>';
       it.applyEffect(xml);
-      __ok({ applied: it.name, radius: ${radius} });
-    `),
+      __ok({ applied: it.name, radius: ${r} });
+    `);
+  },
 };
 
 export const effectTools = [applyAppearanceEffect, setOpacity, addGaussianBlur];
